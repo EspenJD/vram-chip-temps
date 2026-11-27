@@ -26,11 +26,15 @@ jobs:
 
   bridge:
     name: Bridge (Python ${{ matrix.python }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.9", "3.13"]
+        include:
+          - python: "3.9" # the oldest the bridge supports; not built for Ubuntu 26.04
+            os: ubuntu-24.04
+          - python: "3.14"
+            os: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -56,7 +60,7 @@ jobs:
       - name: Build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends build-essential pkg-config clang libclang-dev libdrm-dev
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config clang libclang-dev libdrm-dev libdisplay-info-dev
       - name: Apply the patch
         working-directory: LACT
         run: git apply --verbose ../vram-chip-temps/lact/0001-read-every-GDDR7-chip-on-clamshell-cards.patch

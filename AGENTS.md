@@ -63,11 +63,11 @@ LACT from Flatpak runs its daemon differently: this file does not cover it. Repo
 
 ## 3. Build
 
-Ubuntu 24.04 / Debian 12 packages shown; other distros need the same libraries (clang, libdrm,
-pkg-config). Build as a normal user, not root.
+Ubuntu 24.04 packages shown; other distros need the same libraries (clang, libdrm,
+libdisplay-info, pkg-config). Build as a normal user, not root.
 
 ```sh
-sudo apt-get install -y git curl build-essential pkg-config clang libclang-dev libdrm-dev
+sudo apt-get install -y git curl build-essential pkg-config clang libclang-dev libdrm-dev libdisplay-info-dev
 command -v cargo || { curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal; . "$HOME/.cargo/env"; }
 git clone https://github.com/ilya-zlobintsev/LACT.git && cd LACT
 git checkout 9afbb07597d23a89dd35a91931af401c5b1ff3f5
