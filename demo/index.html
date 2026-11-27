@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VRAM chip temperatures</title>
+<link rel="stylesheet" href="../web/chip-view.css">
+<style>
+  :root {
+    --bg: #17181c; --card: #1e2026; --edge: #2c2f37; --text: #b9bcc8; --strong: #eef0f6; --dim: #7d808c;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg: #eef0f3; --card: #f8f9fb; --edge: #d9dce2; --text: #4a4d57; --strong: #111318; --dim: #6f727d; color-scheme: light; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 24px 16px 40px; background: var(--bg); color: var(--text);
+         font: 14px/1.4 ui-monospace, "JetBrains Mono", "SF Mono", Menlo, Consolas, monospace; }
+  main { max-width: 1240px; margin: 0 auto; }
+  header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 24px; margin-bottom: 20px; }
+  h1 { margin: 0; font-size: 18px; font-weight: 600; color: var(--strong); letter-spacing: .02em; }
+  .source { color: var(--dim); font-size: 12px; letter-spacing: .06em; }
+  .source b { color: var(--text); font-weight: normal; letter-spacing: normal; }
+  .gpu { background: var(--card); border: 1px solid var(--edge); border-radius: 10px; padding: 20px 20px 24px; margin-bottom: 20px; }
+  .gpu h2 { margin: 0 0 14px; font-size: 15px; font-weight: 600; color: var(--strong); }
+  .die { display: flex; flex-wrap: wrap; gap: 8px 32px; margin-bottom: 22px; font-size: 12px; letter-spacing: .06em; color: var(--dim); }
+  .die b { margin-left: 8px; font-size: 16px; font-weight: normal; color: var(--strong); letter-spacing: normal; }
+  .error { color: #ff5f66; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>VRAM chip temperatures</h1>
+    <div class="source">SOURCE <b id="source"></b></div>
+  </header>
+  <div id="gpus"></div>
+</main>
+<script type="module">
+  import { ChipView } from "../web/chip-view.js";
+
+  // ?src=URL polls a JSON source every 2 s, for example the bridge: ?src=/temps.json.
+  // Without it the page shows the recorded sample.
+  const params = new URLSearchParams(location.search);
+  const src = params.get("src");
+  const url = src ?? "samples/load.json";
+  const views = new Map(); // card key -> { view, die nodes }
+
+  function dieRow(section) {
+    const row = document.createElement("div");
+    row.className = "die";
+    const nodes = {};
+    for (const [key, label] of [["core", "CORE"], ["hot", "HOTSPOT"], ["vram", "VRAM"]]) {
+      const cell = document.createElement("span");
+      cell.textContent = label;
+      nodes[key] = document.createElement("b");
+      cell.append(nodes[key]);
+      row.append(cell);
+    }
+    section.append(row);
+    return nodes;
+  }
+
+  function value(temps, names) {
+    for (const name of names) {
+      const entry = temps[name];
+      const celsius = entry !== null && typeof entry === "object" ? entry?.current : entry;
+      if (typeof celsius === "number") return `${celsius} °C`;
+    }
+    return "–";
+  }
+
+  function draw(data) {
+    const root = document.getElementById("gpus");
+    data.gpus.forEach((gpu, n) => {
+      const key = `${n} ${gpu.pci ?? ""} ${gpu.name}`;
+      let entry = views.get(key);
+      if (!entry) {
+        const section = document.createElement("section");
+        section.className = "gpu";
+        const title = document.createElement("h2");
+        title.textContent = gpu.name.replace(/^NVIDIA /, "") + (gpu.pci ? `  ${gpu.pci}` : "");
+        section.append(title);
+        const die = dieRow(section);
+        root.append(section);
+        entry = { die, view: new ChipView(section, { card: gpu.name }) };
+        views.set(key, entry);
+      }
+      entry.die.core.textContent = value(gpu.temps, ["GPU", "edge"]);
+      entry.die.hot.textContent = value(gpu.temps, ["GPU Hotspot", "junction"]);
+      entry.die.vram.textContent = value(gpu.temps, ["VRAM", "mem"]);
+      entry.view.update(gpu.temps);
+    });
+  }
+
+  async function load() {
+    const source = document.getElementById("source");
+    try {
+      const response = await fetch(url, { cache: "no-store" });
+      if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+      const data = await response.json();
+      draw(data);
+      source.textContent = src ? `live, ${src}` : `sample, ${data.source}`;
+      source.classList.remove("error");
+    } catch (error) {
+      source.textContent = `${url}: ${error.message}`;
+      source.classList.add("error");
+    }
+  }
+
+  await load();
+  if (src) setInterval(load, 2000);
+</script>
+</body>
+</html>

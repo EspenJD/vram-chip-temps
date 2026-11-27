@@ -1,0 +1,80 @@
+/* Styles for chip-view.js. Change the look with the --vct-* colours; the page font is used.
+   --vct-cool and --vct-hot are the two ends of the temperature scale. */
+.vct {
+  --vct-cool: #6fd3a8;
+  --vct-hot: #ff5f66;
+  --vct-board: #24262d;   /* board and part fill */
+  --vct-line: #8b8e9a;    /* outlines, power stages, holes */
+  --vct-text: #b9bcc8;    /* chip labels, side titles, figure labels */
+  --vct-strong: #eef0f6;  /* values */
+  container-type: inline-size;
+}
+@media (prefers-color-scheme: light) {
+  .vct {
+    --vct-cool: #12936b;
+    --vct-hot: #d7353d;
+    --vct-board: #ffffff;
+    --vct-line: #6f727d;
+    --vct-text: #4a4d57;
+    --vct-strong: #111318;
+  }
+}
+
+/* A drawing is in millimetres and --mm is the length of one millimetre on the page. A known
+   card has two drawings, the front and the back of its board, each in a frame. The script gives
+   the sizes as numbers of millimetres: a drawing (--w x --h), the part around the GPU that a
+   frame can cut out of it (--rw x --rh; the drawing starts at --rx, --ry in that part) and the
+   room that the two whole boards of the largest card need (--pw wide, --ph tall): every card
+   is drawn at the scale that fits those. --gap is between the two drawings.
+   Three layouts, by the width of the container. Narrow: the two parts around the GPU, front
+   above back. */
+.vct-boards { --gap: 8; --mm: min(100cqw / var(--rw), 4.8px); display: flex; flex-direction: column; align-items: center; gap: 22px; }
+.vct-head { margin-bottom: 10px; text-align: center; color: var(--vct-text); font-size: 13px; letter-spacing: .08em; }
+.vct-frame { width: calc(var(--rw) * var(--mm)); height: calc(var(--rh) * var(--mm)); overflow: hidden; mask-image: linear-gradient(to right, transparent, #000 var(--fl, 0%), #000 calc(100% - var(--fr, 0%)), transparent); }
+.vct-drawing { display: block; max-width: none; width: calc(var(--w) * var(--mm)); height: calc(var(--h) * var(--mm)); }
+.vct-frame > .vct-drawing { margin: calc(var(--ry) * var(--mm)) 0 0 calc(var(--rx) * var(--mm)); }
+.vct-grid { --mm: min(100cqw / var(--w), 2.8px); margin: 0 auto; }
+.vct-drawing * { vector-effect: non-scaling-stroke; }
+.vct-drawing text { text-anchor: middle; font-family: inherit; }
+.vct-label { font-size: 3.5px; fill: var(--vct-text); }
+.vct-value { font-size: 4.9px; fill: var(--vct-strong); }
+.vct-core { font-size: 6.8px; fill: var(--vct-strong); }
+/* Medium: the two parts side by side. */
+@container (min-width: 470px) {
+  .vct-boards { --mm: min(100cqw / (2 * var(--rw) + var(--gap)), 4.2px); flex-direction: row; justify-content: center; align-items: flex-start; gap: calc(var(--gap) * var(--mm)); }
+  .vct-label { font-size: 4px; }
+  .vct-value { font-size: 5.6px; }
+  .vct-core { font-size: 7.6px; }
+}
+/* Wide: the two whole boards side by side. */
+@container (min-width: 720px) {
+  .vct-boards { --mm: min(100cqw / (var(--pw) + var(--gap)), 4.2px); }
+  .vct-label { font-size: 4.2px; }
+  .vct-value { font-size: 5.8px; }
+  .vct-core { font-size: 7.8px; }
+  .vct-frame { width: calc(var(--w) * var(--mm)); height: calc(var(--ph) * var(--mm)); mask-image: none; }
+  .vct-frame > .vct-drawing { margin: 0; }
+}
+
+.vct-board { fill: var(--vct-board); stroke: var(--vct-line); stroke-opacity: .55; stroke-linejoin: round; }
+.vct-part { fill: var(--vct-board); stroke: var(--vct-line); stroke-opacity: .5; }
+.vct-hole { fill: none; stroke: var(--vct-line); stroke-opacity: .4; }
+.vct-band { fill: var(--vct-line); fill-opacity: .1; }
+.vct-pkg { fill: var(--vct-line); fill-opacity: .06; stroke: var(--vct-line); stroke-opacity: .35; }
+.vct-behind { fill: none; stroke: var(--vct-line); stroke-opacity: .35; stroke-dasharray: 3 3; }
+/* --t: 0 at the cool end of the scale or below, 1 at the hot end or above. */
+.vct-heat { --heat: color-mix(in oklch, var(--vct-hot) calc(var(--t, 0) * 100%), var(--vct-cool)); fill: color-mix(in srgb, var(--heat) 22%, transparent); stroke: var(--heat); }
+.vct-spot { fill: color-mix(in srgb, var(--heat) 42%, transparent); }
+.vct-max { fill: color-mix(in srgb, var(--heat) 40%, transparent); stroke-width: 2; }
+.vct-off { fill: none; stroke: var(--vct-line); stroke-opacity: .5; stroke-dasharray: 2 2; }
+.vct-off ~ .vct-label { fill: var(--vct-line); }
+.vct-drawing.vct-grid .vct-label { font-size: 3.2px; }
+.vct-drawing.vct-grid .vct-value { font-size: 5.2px; }
+
+.vct-loose { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 16px; font-size: 13px; color: var(--vct-text); }
+.vct-loose b { color: var(--vct-strong); font-weight: normal; }
+.vct-figures { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 26px; text-align: center; }
+@container (max-width: 469px) { .vct-figures { grid-template-columns: repeat(2, 1fr); row-gap: 18px; } }
+.vct-figure-value { font-size: 22px; color: var(--vct-strong); }
+.vct-unit { font-size: 13px; color: var(--vct-text); }
+.vct-figure-label { margin-top: 4px; font-size: 12px; letter-spacing: .08em; color: var(--vct-text); }

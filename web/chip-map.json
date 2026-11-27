@@ -1,0 +1,51 @@
+{
+  "about": "Places of the GDDR7 memory chips on the board, in millimetres. Origin top left of the board, x right, y down, seen from the front: die side, display bracket left, PCIe edge down. x and y are the centre of a chip. A place has one chip on the front and one right behind it on the back: on the back view x is board.width - x. LACT sensor 'VRAM Chip <label> (<ic>)' is the chip on side sides[<ic>]. Basis and confidence: docs/chip-map.md.",
+  "units": "mm",
+  "sides": {"IC0": "front", "IC1": "back", "Front": "front"},
+  "cards": {
+    "NVIDIA RTX PRO 6000 Blackwell Workstation Edition": {
+      "board": {"width": 113.4, "height": 115.7},
+      "die": {"x": 50.1, "y": 58.1, "width": 24.4, "height": 31.4},
+      "chips": [
+        {"label": "E0", "x": 29.9, "y": 22.9, "width": 12, "height": 14},
+        {"label": "E1", "x": 43.4, "y": 22.9, "width": 12, "height": 14},
+        {"label": "D0", "x": 56.9, "y": 22.9, "width": 12, "height": 14},
+        {"label": "D1", "x": 70.5, "y": 22.9, "width": 12, "height": 14},
+        {"label": "C0", "x": 91.7, "y": 31, "width": 14.1, "height": 12},
+        {"label": "C1", "x": 91.9, "y": 44.5, "width": 14.1, "height": 12},
+        {"label": "B0", "x": 91.9, "y": 58.1, "width": 14.1, "height": 12},
+        {"label": "B1", "x": 91.9, "y": 71.5, "width": 14.1, "height": 12},
+        {"label": "A0", "x": 92, "y": 85, "width": 14.1, "height": 12},
+        {"label": "A1", "x": 69.2, "y": 91.9, "width": 14.1, "height": 12},
+        {"label": "H0", "x": 31.3, "y": 91.9, "width": 14.1, "height": 12},
+        {"label": "H1", "x": 8.2, "y": 85, "width": 14.1, "height": 12},
+        {"label": "G0", "x": 8.3, "y": 71.5, "width": 14.1, "height": 12},
+        {"label": "G1", "x": 8.4, "y": 58.1, "width": 14.1, "height": 12},
+        {"label": "F0", "x": 8.4, "y": 44.5, "width": 14.1, "height": 12},
+        {"label": "F1", "x": 8.5, "y": 31, "width": 14.1, "height": 12}
+      ]
+    },
+    "NVIDIA RTX PRO 6000 Blackwell Max-Q Workstation Edition": {
+      "board": {"width": 190, "height": 110.3},
+      "die": {"x": 92.7, "y": 50.4, "width": 23.9, "height": 31.1},
+      "chips": [
+        {"label": "E0", "x": 71.6, "y": 12.7, "width": 12, "height": 14},
+        {"label": "E1", "x": 85.9, "y": 12.7, "width": 12, "height": 14},
+        {"label": "D0", "x": 99.9, "y": 12.7, "width": 12, "height": 14},
+        {"label": "D1", "x": 114.2, "y": 12.7, "width": 12, "height": 14},
+        {"label": "C0", "x": 135.8, "y": 22.5, "width": 14, "height": 12},
+        {"label": "C1", "x": 135.8, "y": 36.2, "width": 14, "height": 12},
+        {"label": "B0", "x": 135.8, "y": 50.4, "width": 14, "height": 12},
+        {"label": "B1", "x": 135.8, "y": 64.4, "width": 14, "height": 12},
+        {"label": "A0", "x": 135.8, "y": 78.5, "width": 14, "height": 12},
+        {"label": "A1", "x": 112.7, "y": 87.5, "width": 14, "height": 12},
+        {"label": "H0", "x": 72.5, "y": 87.5, "width": 14, "height": 12},
+        {"label": "H1", "x": 49.9, "y": 78.4, "width": 14, "height": 12},
+        {"label": "G0", "x": 49.9, "y": 64.3, "width": 14, "height": 12},
+        {"label": "G1", "x": 49.9, "y": 50.4, "width": 14, "height": 12},
+        {"label": "F0", "x": 49.9, "y": 36.2, "width": 14, "height": 12},
+        {"label": "F1", "x": 49.9, "y": 22.4, "width": 14, "height": 12}
+      ]
+    }
+  }
+}

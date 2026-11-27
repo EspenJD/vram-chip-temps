@@ -1,0 +1,544 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: EspenJD <106583432+EspenJD@users.noreply.github.com>
+Date: Wed, 11 Nov 2026 08:54:28 +0100
+Subject: [PATCH] feat(nvidia): read every GDDR7 chip on clamshell cards
+
+A GDDR7 clamshell card has four valid temperature words per frame buffer
+partition: IC0_SUBP0, IC0_SUBP1, IC1_SUBP0 and IC1_SUBP1. Each word is one
+chip. The code read only the first valid word of a subpartition (IC0) and
+showed its bits 23:16 as "(Front)" and its bits 31:24 as "(Back)". On GDDR7
+all four bytes of a word hold the same code, so that was one chip shown
+twice, and the IC1 chips were never read.
+
+Raw register dumps of an RTX PRO 6000 Blackwell Workstation Edition and a
+Max-Q (32 chips each, 600 samples) show 32 valid words per card. The IC1
+words differ from the IC0 words by 2 to 4 degC at idle and change on their
+own.
+
+On a GDDR7 clamshell card, read every valid word and name the sensors
+"A0 (IC0)" and "A0 (IC1)". The board side of IC0 and IC1 is not known, so
+the names do not say Front or Back. GDDR6X and single-sided GDDR7 cards
+keep their sensors and names.
+
+The register logic moves to its own module with the register read as a
+closure, so that it has unit tests. Two of them use the raw words of the
+two cards.
+---
+ .../src/server/gpu_controller/nvidia.rs       |   1 +
+ .../src/server/gpu_controller/nvidia/nvapi.rs |  81 +---
+ .../gpu_controller/nvidia/vram_temps.rs       | 396 ++++++++++++++++++
+ 3 files changed, 401 insertions(+), 77 deletions(-)
+ create mode 100644 lact-daemon/src/server/gpu_controller/nvidia/vram_temps.rs
+
+diff --git a/lact-daemon/src/server/gpu_controller/nvidia.rs b/lact-daemon/src/server/gpu_controller/nvidia.rs
+index e4fa375..b0c218e 100644
+--- a/lact-daemon/src/server/gpu_controller/nvidia.rs
++++ b/lact-daemon/src/server/gpu_controller/nvidia.rs
+@@ -1,5 +1,6 @@
+ mod driver;
+ pub mod nvapi;
++mod vram_temps;
+ 
+ use super::{CommonControllerInfo, FanControlHandle, GpuController};
+ use crate::{
+diff --git a/lact-daemon/src/server/gpu_controller/nvidia/nvapi.rs b/lact-daemon/src/server/gpu_controller/nvidia/nvapi.rs
+index a9eb743..8067844 100644
+--- a/lact-daemon/src/server/gpu_controller/nvidia/nvapi.rs
++++ b/lact-daemon/src/server/gpu_controller/nvidia/nvapi.rs
+@@ -5,6 +5,7 @@
+     clippy::large_stack_arrays
+ )]
+ 
++use super::vram_temps;
+ use crate::bindings::nvidia::{
+     NVAPI_MAX_PHYSICAL_GPUS, NVAPI_SHORT_STRING_MAX, NvAPI_Status, NvPhysicalGpuHandle, NvS32,
+     NvU8, NvU16, NvU32, NvU64,
+@@ -267,83 +268,9 @@ impl NvApi {
+         handle: NvPhysicalGpuHandle,
+         vram_type: Option<&str>,
+     ) -> anyhow::Result<Vec<(String, u64)>> {
+-        const REG_OFFSET_GDDR_TEMP_DATA_BASE: u32 = 0x009024C0;
+-        const REG_OFFSET_GDDR_TEMP_STATUS_BASE: u32 = 0x009024D0;
+-        const REG_OFFSET_GDDR_CLAMSHELL: u32 = 0x00900200;
+-
+-        fn parse_temp(raw: u64) -> u64 {
+-            2 * raw.min(0x50) - 40
+-        }
+-
+-        let mut temps = Vec::new();
+-
+-        if let Some("GDDR6x" | "GDDR7") = vram_type {
+-            let is_clamshell = unsafe {
+-                self.read_u32_register(handle, REG_OFFSET_GDDR_CLAMSHELL)
+-                    .is_ok_and(|value| (value >> 22) & 1 == 1)
+-            };
+-
+-            for partition in 0..=8 {
+-                let data_offset = REG_OFFSET_GDDR_TEMP_DATA_BASE + partition * 0x4000;
+-                let status_offset = REG_OFFSET_GDDR_TEMP_STATUS_BASE + partition * 0x4000;
+-
+-                unsafe {
+-                    let Ok(status) = self.read_u32_register(handle, status_offset) else {
+-                        continue;
+-                    };
+-
+-                    // Explicit poison data
+-                    if status & 0xFFFF0000 == 0xBADF0000 {
+-                        continue;
+-                    }
+-
+-                    let mut i = 0;
+-                    'pairs: for slot_pair in [[(0x0, 24), (0x8, 26)], [(0x4, 25), (0xC, 27)]] {
+-                        for (slot, status_bit) in slot_pair {
+-                            if (status >> status_bit) & 1 == 1 {
+-                                let data = self.read_u32_register(handle, data_offset + slot)?;
+-
+-                                if data == 0
+-                                    || data == u64::from(u32::MAX)
+-                                    || data & 0xFFFF0000 == 0xBADF0000
+-                                {
+-                                    continue;
+-                                }
+-
+-                                let pc0 = (data >> 16) & 0xFF;
+-                                let pc1 = (data >> 24) & 0xFF;
+-
+-                                if pc0 == 0 || pc0 == u64::from(u8::MAX) {
+-                                    continue;
+-                                }
+-
+-                                let partition_letter = char::from_u32(('A' as u32) + partition)
+-                                    .context("Invalid partition")?;
+-                                let label_base = format!("{partition_letter}{i}");
+-
+-                                let front_label = if is_clamshell {
+-                                    format!("{label_base} (Front)")
+-                                } else {
+-                                    label_base.clone()
+-                                };
+-
+-                                temps.push((front_label, parse_temp(pc0)));
+-
+-                                if is_clamshell && pc1 != 0 && pc1 != u64::from(u8::MAX) {
+-                                    temps.push((format!("{label_base} (Back)"), parse_temp(pc1)));
+-                                }
+-
+-                                i += 1;
+-
+-                                continue 'pairs;
+-                            }
+-                        }
+-                    }
+-                }
+-            }
+-        }
+-
+-        Ok(temps)
++        vram_temps::read_vram_temps(vram_type, |offset| unsafe {
++            self.read_u32_register(handle, offset)
++        })
+     }
+ 
+     pub unsafe fn read_blackwell_hotspot(
+diff --git a/lact-daemon/src/server/gpu_controller/nvidia/vram_temps.rs b/lact-daemon/src/server/gpu_controller/nvidia/vram_temps.rs
+new file mode 100644
+index 0000000..08f0ab0
+--- /dev/null
++++ b/lact-daemon/src/server/gpu_controller/nvidia/vram_temps.rs
+@@ -0,0 +1,396 @@
++//! Per-chip GDDR6X / GDDR7 temperatures from the frame buffer partition registers.
++//!
++//! Each frame buffer partition has one status word and four data words:
++//!
++//! | Word        | Offset in the partition | Valid bit in the status word |
++//! |-------------|-------------------------|------------------------------|
++//! | `IC0_SUBP0` | `+0x0`                  | 24                           |
++//! | `IC0_SUBP1` | `+0x4`                  | 25                           |
++//! | `IC1_SUBP0` | `+0x8`                  | 26                           |
++//! | `IC1_SUBP1` | `+0xC`                  | 27                           |
++//!
++//! Bits 23:16 of a data word hold a temperature code: `2 * code - 40` degrees Celsius.
++//!
++//! On a GDDR7 clamshell card (memory on both sides of the board) every word is one chip:
++//! `IC0` and `IC1` are the two chips of a subpartition. All four bytes of a word hold the same
++//! code there, so bits 31:24 are not a second chip. Raw dumps of two RTX PRO 6000 Blackwell
++//! cards (32 chips each) show 32 valid words with 32 independent readings.
++//!
++//! On GDDR6X the first valid word of a subpartition is used, and on a clamshell card its bits
++//! 31:24 are the chip on the other side of the board.
++
++use anyhow::Context;
++
++const REG_OFFSET_GDDR_TEMP_DATA_BASE: u32 = 0x0090_24C0;
++const REG_OFFSET_GDDR_TEMP_STATUS_BASE: u32 = 0x0090_24D0;
++const REG_OFFSET_GDDR_CLAMSHELL: u32 = 0x0090_0200;
++const PARTITION_STRIDE: u32 = 0x4000;
++
++/// Data words of one subpartition as `(offset, valid bit)`: the `IC0` word, then the `IC1` word.
++const SUBPARTITIONS: [[(u32, u32); 2]; 2] = [[(0x0, 24), (0x8, 26)], [(0x4, 25), (0xC, 27)]];
++
++fn parse_temp(raw: u64) -> u64 {
++    2 * raw.min(0x50) - 40
++}
++
++/// Reads the memory chip temperatures through `read_register` (a 32-bit GPU register read).
++///
++/// Returns `(label, degrees Celsius)`. The label is the partition letter and the index of the
++/// subpartition among those with a reading, plus:
++/// - ` (IC0)` / ` (IC1)` on a GDDR7 clamshell card: one entry per chip;
++/// - ` (Front)` / ` (Back)` on a GDDR6X clamshell card;
++/// - nothing on a card with memory on one side.
++pub fn read_vram_temps(
++    vram_type: Option<&str>,
++    mut read_register: impl FnMut(u32) -> anyhow::Result<u64>,
++) -> anyhow::Result<Vec<(String, u64)>> {
++    let mut temps = Vec::new();
++
++    let Some("GDDR6x" | "GDDR7") = vram_type else {
++        return Ok(temps);
++    };
++
++    let is_clamshell =
++        read_register(REG_OFFSET_GDDR_CLAMSHELL).is_ok_and(|value| (value >> 22) & 1 == 1);
++    let every_word_is_a_chip = is_clamshell && vram_type == Some("GDDR7");
++
++    for partition in 0..=8 {
++        let data_offset = REG_OFFSET_GDDR_TEMP_DATA_BASE + partition * PARTITION_STRIDE;
++        let status_offset = REG_OFFSET_GDDR_TEMP_STATUS_BASE + partition * PARTITION_STRIDE;
++
++        let Ok(status) = read_register(status_offset) else {
++            continue;
++        };
++
++        // Explicit poison data
++        if status & 0xFFFF_0000 == 0xBADF_0000 {
++            continue;
++        }
++
++        let partition_letter =
++            char::from_u32(('A' as u32) + partition).context("Invalid partition")?;
++
++        let mut i = 0;
++        for words in SUBPARTITIONS {
++            let mut has_reading = false;
++
++            for (ic, (slot, status_bit)) in words.into_iter().enumerate() {
++                if (status >> status_bit) & 1 != 1 {
++                    continue;
++                }
++
++                let data = read_register(data_offset + slot)?;
++
++                if data == 0 || data == u64::from(u32::MAX) || data & 0xFFFF_0000 == 0xBADF_0000 {
++                    continue;
++                }
++
++                let pc0 = (data >> 16) & 0xFF;
++                let pc1 = (data >> 24) & 0xFF;
++
++                if pc0 == 0 || pc0 == u64::from(u8::MAX) {
++                    continue;
++                }
++
++                has_reading = true;
++                let label_base = format!("{partition_letter}{i}");
++
++                if every_word_is_a_chip {
++                    // Go on to the other word of the subpartition: it is the other chip.
++                    temps.push((format!("{label_base} (IC{ic})"), parse_temp(pc0)));
++                    continue;
++                }
++
++                let front_label = if is_clamshell {
++                    format!("{label_base} (Front)")
++                } else {
++                    label_base.clone()
++                };
++
++                temps.push((front_label, parse_temp(pc0)));
++
++                if is_clamshell && pc1 != 0 && pc1 != u64::from(u8::MAX) {
++                    temps.push((format!("{label_base} (Back)"), parse_temp(pc1)));
++                }
++
++                break;
++            }
++
++            if has_reading {
++                i += 1;
++            }
++        }
++    }
++
++    Ok(temps)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::{
++        PARTITION_STRIDE, REG_OFFSET_GDDR_CLAMSHELL, REG_OFFSET_GDDR_TEMP_DATA_BASE,
++        REG_OFFSET_GDDR_TEMP_STATUS_BASE, read_vram_temps,
++    };
++    use anyhow::anyhow;
++    use std::collections::HashMap;
++
++    const CLAMSHELL: u64 = 0x1EC7_8883; // bit 22 set
++    const SINGLE_SIDED: u64 = 0x1E87_8883;
++    const ALL_VALID: u64 = 0xFF00_0000;
++    const NO_PARTITION: u64 = 0xBADF_1100;
++
++    /// A fake GPU: register values by offset, and the offsets that were read.
++    struct Registers {
++        values: HashMap<u32, u64>,
++        reads: Vec<u32>,
++    }
++
++    impl Registers {
++        /// `partitions` holds, per partition, the status word and the four data words in
++        /// offset order (`IC0_SUBP0`, `IC0_SUBP1`, `IC1_SUBP0`, `IC1_SUBP1`). The partitions
++        /// after the last one answer like a missing partition.
++        fn new(clamshell: u64, partitions: &[(u64, [u64; 4])]) -> Self {
++            let mut values = HashMap::from([(REG_OFFSET_GDDR_CLAMSHELL, clamshell)]);
++            for partition in 0..=8 {
++                let base = partition * PARTITION_STRIDE;
++                let (status, words) = partitions
++                    .get(partition as usize)
++                    .copied()
++                    .unwrap_or((NO_PARTITION, [NO_PARTITION; 4]));
++                values.insert(REG_OFFSET_GDDR_TEMP_STATUS_BASE + base, status);
++                for (slot, word) in (0u32..).step_by(4).zip(words) {
++                    values.insert(REG_OFFSET_GDDR_TEMP_DATA_BASE + base + slot, word);
++                }
++            }
++            Self {
++                values,
++                reads: Vec::new(),
++            }
++        }
++
++        fn temps(&mut self, vram_type: Option<&str>) -> Vec<(String, u64)> {
++            read_vram_temps(vram_type, |offset| {
++                self.reads.push(offset);
++                self.values
++                    .get(&offset)
++                    .copied()
++                    .ok_or_else(|| anyhow!("no register at {offset:#x}"))
++            })
++            .unwrap()
++        }
++
++        fn was_read(&self, partition: u32, slot: u32) -> bool {
++            self.reads
++                .contains(&(REG_OFFSET_GDDR_TEMP_DATA_BASE + partition * PARTITION_STRIDE + slot))
++        }
++    }
++
++    fn all_valid(words: [[u64; 4]; 8]) -> Vec<(u64, [u64; 4])> {
++        words.into_iter().map(|words| (ALL_VALID, words)).collect()
++    }
++
++    fn labelled(temps: &[(&str, u64)]) -> Vec<(String, u64)> {
++        temps
++            .iter()
++            .map(|(label, temp)| ((*label).to_owned(), *temp))
++            .collect()
++    }
++
++    /// Raw words of an RTX PRO 6000 Blackwell Max-Q (idle, 2026-11-11).
++    #[test]
++    fn gddr7_clamshell_reads_every_chip() {
++        let mut gpu = Registers::new(
++            CLAMSHELL,
++            &all_valid([
++                [0x2020_2020, 0x2020_2020, 0x2020_2020, 0x2020_2020],
++                [0x2121_2121, 0x2222_2222, 0x2121_2121, 0x2121_2121],
++                [0x2020_2020, 0x2222_2222, 0x2222_2222, 0x2121_2121],
++                [0x2222_2222, 0x2020_2020, 0x2121_2121, 0x2121_2121],
++                [0x2121_2121, 0x2121_2121, 0x2121_2121, 0x2020_2020],
++                [0x2121_2121, 0x2222_2222, 0x2121_2121, 0x2222_2222],
++                [0x2121_2121, 0x2020_2020, 0x2020_2020, 0x2121_2121],
++                [0x2020_2020, 0x2121_2121, 0x2121_2121, 0x2121_2121],
++            ]),
++        );
++
++        assert_eq!(
++            gpu.temps(Some("GDDR7")),
++            labelled(&[
++                ("A0 (IC0)", 24),
++                ("A0 (IC1)", 24),
++                ("A1 (IC0)", 24),
++                ("A1 (IC1)", 24),
++                ("B0 (IC0)", 26),
++                ("B0 (IC1)", 26),
++                ("B1 (IC0)", 28),
++                ("B1 (IC1)", 26),
++                ("C0 (IC0)", 24),
++                ("C0 (IC1)", 28),
++                ("C1 (IC0)", 28),
++                ("C1 (IC1)", 26),
++                ("D0 (IC0)", 28),
++                ("D0 (IC1)", 26),
++                ("D1 (IC0)", 24),
++                ("D1 (IC1)", 26),
++                ("E0 (IC0)", 26),
++                ("E0 (IC1)", 26),
++                ("E1 (IC0)", 26),
++                ("E1 (IC1)", 24),
++                ("F0 (IC0)", 26),
++                ("F0 (IC1)", 26),
++                ("F1 (IC0)", 28),
++                ("F1 (IC1)", 28),
++                ("G0 (IC0)", 26),
++                ("G0 (IC1)", 24),
++                ("G1 (IC0)", 24),
++                ("G1 (IC1)", 26),
++                ("H0 (IC0)", 24),
++                ("H0 (IC1)", 26),
++                ("H1 (IC0)", 26),
++                ("H1 (IC1)", 26),
++            ])
++        );
++    }
++
++    /// Raw words of an RTX PRO 6000 Blackwell Workstation Edition (idle, 2026-11-11).
++    #[test]
++    fn gddr7_clamshell_second_card() {
++        let mut gpu = Registers::new(
++            CLAMSHELL,
++            &all_valid([
++                [0x1E1E_1E1E, 0x1F1F_1F1F, 0x1F1F_1F1F, 0x1E1E_1E1E],
++                [0x1F1F_1F1F, 0x2020_2020, 0x2020_2020, 0x1F1F_1F1F],
++                [0x1F1F_1F1F, 0x1E1E_1E1E, 0x1F1F_1F1F, 0x2020_2020],
++                [0x1F1F_1F1F, 0x1E1E_1E1E, 0x1F1F_1F1F, 0x2020_2020],
++                [0x1F1F_1F1F, 0x1F1F_1F1F, 0x1F1F_1F1F, 0x1F1F_1F1F],
++                [0x1F1F_1F1F, 0x1F1F_1F1F, 0x1F1F_1F1F, 0x1F1F_1F1F],
++                [0x1E1E_1E1E, 0x1F1F_1F1F, 0x2020_2020, 0x1F1F_1F1F],
++                [0x1F1F_1F1F, 0x1E1E_1E1E, 0x1F1F_1F1F, 0x1F1F_1F1F],
++            ]),
++        );
++
++        let temps = gpu.temps(Some("GDDR7"));
++
++        assert_eq!(temps.len(), 32);
++        assert_eq!(
++            temps[..8],
++            labelled(&[
++                ("A0 (IC0)", 20),
++                ("A0 (IC1)", 22),
++                ("A1 (IC0)", 22),
++                ("A1 (IC1)", 20),
++                ("B0 (IC0)", 22),
++                ("B0 (IC1)", 24),
++                ("B1 (IC0)", 24),
++                ("B1 (IC1)", 22),
++            ])
++        );
++        assert_eq!(
++            temps[24..],
++            labelled(&[
++                ("G0 (IC0)", 20),
++                ("G0 (IC1)", 24),
++                ("G1 (IC0)", 22),
++                ("G1 (IC1)", 22),
++                ("H0 (IC0)", 22),
++                ("H0 (IC1)", 22),
++                ("H1 (IC0)", 20),
++                ("H1 (IC1)", 22),
++            ])
++        );
++    }
++
++    #[test]
++    fn gddr7_clamshell_skips_words_without_a_reading() {
++        let mut gpu = Registers::new(
++            CLAMSHELL,
++            &[
++                // Only subpartition 1 is valid: it gets index 0, as on the other card types.
++                (
++                    0x0A00_0000,
++                    [0x2020_2020, 0x2121_2121, 0x2222_2222, 0x2323_2323],
++                ),
++                // Words that are valid by the status word but hold no temperature.
++                (ALL_VALID, [0, 0x2424_2424, 0x2525_2525, 0xFFFF_FFFF]),
++                (
++                    ALL_VALID,
++                    [0xBADF_1100, 0x00FF_0000, 0xBADF_1100, 0x2626_2626],
++                ),
++            ],
++        );
++
++        assert_eq!(
++            gpu.temps(Some("GDDR7")),
++            labelled(&[
++                ("A0 (IC0)", 26),
++                ("A0 (IC1)", 30),
++                ("B0 (IC1)", 34),
++                ("B1 (IC0)", 32),
++                ("C0 (IC1)", 36),
++            ])
++        );
++        assert!(!gpu.was_read(0, 0x0));
++        assert!(!gpu.was_read(0, 0x8));
++        assert!(!gpu.was_read(3, 0x0));
++    }
++
++    #[test]
++    fn gddr6x_clamshell_keeps_front_and_back() {
++        let mut gpu = Registers::new(
++            CLAMSHELL,
++            &[
++                (
++                    ALL_VALID,
++                    [0x3F37_0000, 0x4038_0000, 0x1111_1111, 0x1111_1111],
++                ),
++                // The first word of each subpartition has no reading: the second one is used.
++                (ALL_VALID, [0, 0xFFFF_FFFF, 0x4139_0000, 0x423A_0000]),
++            ],
++        );
++
++        assert_eq!(
++            gpu.temps(Some("GDDR6x")),
++            labelled(&[
++                ("A0 (Front)", 70),
++                ("A0 (Back)", 86),
++                ("A1 (Front)", 72),
++                ("A1 (Back)", 88),
++                ("B0 (Front)", 74),
++                ("B0 (Back)", 90),
++                ("B1 (Front)", 76),
++                ("B1 (Back)", 92),
++            ])
++        );
++        assert!(!gpu.was_read(0, 0x8));
++        assert!(!gpu.was_read(0, 0xC));
++    }
++
++    #[test]
++    fn single_sided_cards_keep_one_reading_per_subpartition() {
++        for vram_type in ["GDDR6x", "GDDR7"] {
++            let mut gpu = Registers::new(
++                SINGLE_SIDED,
++                &[(
++                    ALL_VALID,
++                    [0x2323_2323, 0x2424_2424, 0x2525_2525, 0x2626_2626],
++                )],
++            );
++
++            assert_eq!(
++                gpu.temps(Some(vram_type)),
++                labelled(&[("A0", 30), ("A1", 32)])
++            );
++            assert!(!gpu.was_read(0, 0x8));
++            assert!(!gpu.was_read(0, 0xC));
++        }
++    }
++
++    #[test]
++    fn other_memory_types_are_not_read() {
++        let mut gpu = Registers::new(CLAMSHELL, &all_valid([[0x2020_2020; 4]; 8]));
++
++        assert_eq!(gpu.temps(Some("GDDR6")), Vec::new());
++        assert_eq!(gpu.temps(None), Vec::new());
++        assert!(gpu.reads.is_empty());
++    }
++}

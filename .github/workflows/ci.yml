@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Board view (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 24]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Tests and chip-map.json check
+        run: npm test
+
+  bridge:
+    name: Bridge (Python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.9", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Tests against a fake LACT socket
+        run: python -W error::ResourceWarning -m unittest discover -s tests -v
+
+  lact-patch:
+    name: LACT patch (build and unit tests)
+    runs-on: ubuntu-24.04
+    env:
+      LACT_COMMIT: 9afbb07597d23a89dd35a91931af401c5b1ff3f5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: vram-chip-temps
+      - uses: actions/checkout@v7
+        with:
+          repository: ilya-zlobintsev/LACT
+          ref: ${{ env.LACT_COMMIT }}
+          path: LACT
+      - name: Build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential pkg-config clang libclang-dev libdrm-dev
+      - name: Apply the patch
+        working-directory: LACT
+        run: git apply --verbose ../vram-chip-temps/lact/0001-read-every-GDDR7-chip-on-clamshell-cards.patch
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: LACT
+      - name: Unit tests of the patch
+        working-directory: LACT
+        run: cargo test -p lact-daemon --no-default-features --features nvidia --lib vram_temps
+      - name: Headless build (as in AGENTS.md)
+        working-directory: LACT
+        run: |
+          cargo build -p lact --release --no-default-features --features nvidia
+          ./target/release/lact --help | head -5
